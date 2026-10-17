@@ -356,6 +356,7 @@ textarea.form-control { resize: vertical; min-height: 80px; }
 .login-info b { color: var(--primary-dark); }
 .login-error { background: #fee2e2; color: #b91c1c; padding: 10px 14px; border-radius: 8px; font-size: 12px; margin-bottom: 14px; display: none; }
 .login-error.show { display: block; }
+.login-info { display: none; } /* Hide demo account info for security */
 
 /* ============ NOTIFICATION PANEL ============ */
 .notif-panel { position: absolute; top: 50px; right: 0; width: 340px; background: #fff; border: 1px solid var(--gray-200); border-radius: 12px; box-shadow: var(--shadow-lg); z-index: 60; display: none; max-height: 480px; overflow: hidden; flex-direction: column; }
@@ -460,6 +461,7 @@ textarea.form-control { resize: vertical; min-height: 80px; }
       <a href="#" class="nav-item" data-page="nilai"><span class="ico">&#127942;</span> Nilai &amp; Rapor</a>
       <a href="#" class="nav-item" data-page="absensi"><span class="ico">&#9989;</span> Absensi</a>
       <a href="#" class="nav-item" data-page="rapor"><span class="ico">&#128209;</span> Rapor</a>
+      <a href="#" class="nav-item" data-page="materi"><span class="ico">&#128214;</span> Materi &amp; Soal</a>
       <div class="nav-section">Komunikasi</div>
       <a href="#" class="nav-item" data-page="chat"><span class="ico">&#128172;</span> Chat</a>
       <a href="#" class="nav-item" data-page="akun"><span class="ico">&#128100;</span> Manajemen Akun</a>
@@ -902,6 +904,56 @@ textarea.form-control { resize: vertical; min-height: 80px; }
         </div>
       </section>
 
+      <!-- ============ MATERI & SOAL ============ -->
+      <section class="page" id="page-materi">
+        <h1 class="page-title">Materi &amp; Soal</h1>
+        <p class="page-desc">Upload &amp; unduh materi ajar, soal latihan, dan try out. File disimpan di cloud & dapat diakses dari device manapun.</p>
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h3>Daftar Materi &amp; Soal</h3>
+              <div class="subtitle" id="materiCount">0 dokumen</div>
+            </div>
+            <button class="btn btn-primary" id="btnUploadMateri" onclick="openModal('materi')">&#43; Upload Materi</button>
+          </div>
+          <div class="card-body">
+            <div class="filter-bar">
+              <div class="search">
+                <span class="ico">&#128269;</span>
+                <input type="text" id="searchMateri" placeholder="Cari judul materi..." oninput="renderMateri()" />
+              </div>
+              <select id="filterKategoriMateri" onchange="renderMateri()">
+                <option value="">Semua Kategori</option>
+                <option value="Materi Ajar">Materi Ajar</option>
+                <option value="Soal">Soal</option>
+                <option value="Latihan">Latihan</option>
+                <option value="Try Out">Try Out</option>
+              </select>
+              <select id="filterMapelMateri" onchange="renderMateri()">
+                <option value="">Semua Mapel</option>
+              </select>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Judul</th>
+                    <th>Kategori</th>
+                    <th>Mapel</th>
+                    <th>Kelas</th>
+                    <th>File</th>
+                    <th>Uploader</th>
+                    <th>Tanggal</th>
+                    <th>Aksi</th>
+                  </tr>
+                </thead>
+                <tbody id="tableMateri"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- ============ RAPOR ============ -->
       <section class="page" id="page-rapor">
         <h1 class="page-title">Cetak Rapor Siswa</h1>
@@ -1174,12 +1226,14 @@ const FIELD_MAP = {
   nilai:      { id:'id', siswaId:'siswa_id', mapelId:'mapel_id' },
   absensi:    { id:'id', jadwalId:'jadwal_id' },
   chat:       { id:'id', from:'from_user', to:'to_user', fromMe:'from_me' },
-  users:      { id:'id', refId:'ref_id' }
+  users:      { id:'id', refId:'ref_id' },
+  materi:     { id:'id', mapelId:'mapel_id', kelasTarget:'kelas_target', fileName:'file_name', fileType:'file_type', fileSize:'file_size', fileData:'file_data', uploadedBy:'uploaded_by', uploadedAt:'uploaded_at' }
 };
 const TABLE_NAMES = {
   siswa: 'bimbel_siswa', pengajar: 'bimbel_pengajar', mapel: 'bimbel_mapel',
   jadwal: 'bimbel_jadwal', pembayaran: 'bimbel_pembayaran', nilai: 'bimbel_nilai',
-  absensi: 'bimbel_absensi', chat: 'bimbel_chat', users: 'bimbel_users'
+  absensi: 'bimbel_absensi', chat: 'bimbel_chat', users: 'bimbel_users',
+  materi: 'bimbel_materi'
 };
 // Plain fields (same name in both JS & Supabase)
 const PLAIN_FIELDS = {
@@ -1191,7 +1245,8 @@ const PLAIN_FIELDS = {
   nilai: ['jenis','tgl','nilai'],
   absensi: ['tanggal','records'],
   chat: ['text','ts'],
-  users: ['username','password','role','name']
+  users: ['username','password','role','name'],
+  materi: ['judul','deskripsi','kategori']
 };
 
 function mapRowToSupabase(table, row) {
@@ -1450,6 +1505,7 @@ async function refreshTableFromSupabase(tableName) {
         else if (pageId === 'pembayaran') renderPembayaran();
         else if (pageId === 'nilai') renderNilai();
         else if (pageId === 'absensi') renderAbsensi();
+        else if (pageId === 'materi') renderMateri();
         else if (pageId === 'chat') refreshChatUI();
         else if (pageId === 'akun') renderAkun();
         else if (pageId === 'laporan') renderLaporan();
@@ -1472,9 +1528,10 @@ let DB = {
   absensi: [],
   chat: [],
   users: [],
+  materi: [],
   theme: 'indigo',
   currentUser: null,
-  nextId: { siswa:1, pengajar:1, mapel:1, jadwal:1, pembayaran:1, nilai:1, absensi:1, chat:1, users:1 }
+  nextId: { siswa:1, pengajar:1, mapel:1, jadwal:1, pembayaran:1, nilai:1, absensi:1, chat:1, users:1, materi:1 }
 };
 
 const THEMES = {
@@ -1492,9 +1549,9 @@ let onlineUsers = new Set(); // chatIds of users currently online (via Supabase 
 
 // Role permissions map (which pages each role can access)
 const ROLE_ACCESS = {
-  admin:   ['dashboard','siswa','pengajar','mapel','jadwal','pembayaran','nilai','absensi','rapor','chat','akun','laporan','pengaturan'],
-  pengajar:['dashboard','siswa','jadwal','absensi','nilai','chat','akun'],
-  siswa:   ['dashboard','jadwal','pembayaran','nilai','rapor','chat']
+  admin:   ['dashboard','siswa','pengajar','mapel','jadwal','pembayaran','nilai','absensi','rapor','materi','chat','akun','laporan','pengaturan'],
+  pengajar:['dashboard','siswa','jadwal','absensi','nilai','materi','chat','akun'],
+  siswa:   ['dashboard','jadwal','pembayaran','nilai','rapor','materi','chat']
 };
 const ROLE_LABEL = { admin:'Administrator', pengajar:'Pengajar', siswa:'Siswa' };
 
@@ -1587,12 +1644,16 @@ function seedData() {
 
 // ---------- STORAGE ----------
 function saveData(dirtyTables) {
+  // Defensive: ensure DB.materi exists
+  if (!DB.materi) DB.materi = [];
+  if (!DB.nextId) DB.nextId = {};
+  if (!DB.nextId.materi || isNaN(DB.nextId.materi)) DB.nextId.materi = 1;
   // Always save to localStorage as cache (instant)
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
       siswa: DB.siswa, pengajar: DB.pengajar, mapel: DB.mapel, jadwal: DB.jadwal,
       pembayaran: DB.pembayaran, nilai: DB.nilai, absensi: DB.absensi,
-      chat: DB.chat, users: DB.users, theme: DB.theme, currentUser: DB.currentUser,
+      chat: DB.chat, users: DB.users, materi: DB.materi, theme: DB.theme, currentUser: DB.currentUser,
       nextId: DB.nextId
     }));
   } catch(e) { console.warn('localStorage save failed:', e.message); }
@@ -1626,10 +1687,11 @@ async function loadData() {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
         siswa: DB.siswa, pengajar: DB.pengajar, mapel: DB.mapel, jadwal: DB.jadwal,
         pembayaran: DB.pembayaran, nilai: DB.nilai, absensi: DB.absensi,
-        chat: DB.chat, users: DB.users, theme: DB.theme, currentUser: null,
+        chat: DB.chat, users: DB.users, materi: DB.materi, theme: DB.theme, currentUser: null,
         nextId: DB.nextId
       }));
     } catch(e) {}
+    ensureNextIdDefaults();
     return true;
   }
   // Fallback to localStorage
@@ -1638,15 +1700,23 @@ async function loadData() {
     try {
       const parsed = JSON.parse(raw);
       Object.assign(DB, parsed);
-      // Ensure nextId has all tables
-      const defaults = { siswa:1, pengajar:1, mapel:1, jadwal:1, pembayaran:1, nilai:1, absensi:1, chat:1, users:1 };
-      Object.keys(defaults).forEach(k => { if (!DB.nextId[k]) DB.nextId[k] = defaults[k]; });
+      // Ensure materi array exists (for backward compat with old localStorage)
+      if (!DB.materi) DB.materi = [];
+      ensureNextIdDefaults();
     } catch(e) { seedData(); }
   } else {
     seedData();
   }
   setSyncStatus('offline', 'Offline');
   return false;
+}
+function ensureNextIdDefaults() {
+  const defaults = { siswa:1, pengajar:1, mapel:1, jadwal:1, pembayaran:1, nilai:1, absensi:1, chat:1, users:1, materi:1 };
+  if (!DB.nextId) DB.nextId = {};
+  Object.keys(defaults).forEach(k => {
+    if (!DB.nextId[k] || isNaN(DB.nextId[k])) DB.nextId[k] = defaults[k];
+  });
+  if (!DB.materi) DB.materi = [];
 }
 
 // ---------- HELPERS ----------
@@ -1692,7 +1762,8 @@ function navigate(page) {
     dashboard:'Dashboard', siswa:'Manajemen Siswa', pengajar:'Manajemen Pengajar',
     mapel:'Mata Pelajaran', jadwal:'Jadwal Kelas', pembayaran:'Pembayaran SPP',
     nilai:'Nilai & Rapor', absensi:'Absensi Siswa', rapor:'Cetak Rapor',
-    chat:'Chat Siswa & Pengajar', akun:'Manajemen Akun', laporan:'Laporan', pengaturan:'Pengaturan'
+    materi:'Materi & Soal', chat:'Chat Antar Pengguna', akun:'Manajemen Akun', 
+    laporan:'Laporan', pengaturan:'Pengaturan'
   };
   document.getElementById('pageTitle').textContent = titles[page];
   document.getElementById('pageBreadcrumb').innerHTML = 'Beranda &rsaquo; ' + titles[page];
@@ -1710,6 +1781,7 @@ function navigate(page) {
   if (page === 'nilai') renderNilai();
   if (page === 'absensi') renderAbsensi();
   if (page === 'rapor') { populateRaporSelect(); renderRapor(); }
+  if (page === 'materi') renderMateri();
   if (page === 'chat') renderChatPage();
   if (page === 'akun') renderAkun();
   if (page === 'laporan') renderLaporan();
@@ -2151,7 +2223,9 @@ function openModal(type, id) {
     mapel: (isEdit ? 'Edit' : 'Tambah') + ' Mata Pelajaran',
     jadwal: (isEdit ? 'Edit' : 'Tambah') + ' Jadwal',
     pembayaran: (isEdit ? 'Edit' : 'Catat') + ' Pembayaran',
-    nilai: (isEdit ? 'Edit' : 'Input') + ' Nilai'
+    nilai: (isEdit ? 'Edit' : 'Input') + ' Nilai',
+    users: (isEdit ? 'Edit' : 'Tambah') + ' Akun',
+    materi: (isEdit ? 'Edit' : 'Upload') + ' Materi & Soal'
   };
   document.getElementById('modalTitle').textContent = titles[type];
   const body = document.getElementById('modalBody');
@@ -2230,6 +2304,15 @@ function openModal(type, id) {
     // Initialize ref select based on default role (siswa)
     if (!data) updateRefSelect('siswa');
     else updateRefSelect(data.role, data.refId);
+  } else if (type === 'materi') {
+    body.innerHTML = '<div class="form-grid">' +
+      '<div class="form-group full"><label>Judul <span class="req">*</span></label><input type="text" class="form-control" id="f_judul" value="' + (data ? data.judul : '') + '" placeholder="Contoh: Bab 3 - Persamaan Kuadrat"></div>' +
+      '<div class="form-group"><label>Kategori <span class="req">*</span></label><select class="form-control" id="f_kategori">' + ['Materi Ajar','Soal','Latihan','Try Out'].map(k => '<option value="' + k + '"' + (data && data.kategori === k ? ' selected' : (k === 'Materi Ajar' && !data ? ' selected' : '')) + '>' + k + '</option>').join('') + '</select></div>' +
+      '<div class="form-group"><label>Mapel</label><select class="form-control" id="f_mapelId"><option value="">-- Pilih Mapel --</option>' + DB.mapel.map(m => '<option value="' + m.id + '"' + (data && data.mapelId === m.id ? ' selected' : '') + '>' + m.nama + '</option>').join('') + '</select></div>' +
+      '<div class="form-group"><label>Kelas Target</label><select class="form-control" id="f_kelasTarget">' + ['Semua Kelas','7 SMP','8 SMP','9 SMP','10 SMA','11 SMA','12 SMA'].map(k => '<option value="' + k + '"' + (data && data.kelasTarget === k ? ' selected' : (k === 'Semua Kelas' && !data ? ' selected' : '')) + '>' + k + '</option>').join('') + '</select></div>' +
+      '<div class="form-group full"><label>Deskripsi</label><textarea class="form-control" id="f_deskripsi" rows="2" placeholder="Ringkasan isi materi...">' + (data ? data.deskripsi || '' : '') + '</textarea></div>' +
+      '<div class="form-group full"><label>File ' + (isEdit ? '(kosongkan jika tidak ganti file)' : '<span class="req">*</span>') + ' <small style="font-weight:normal;color:var(--gray-500)">max 5MB</small></label><input type="file" class="form-control" id="f_file" onchange="handleFileUpload(this)" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.jpg,.jpeg,.png,.gif,.mp4,.mp3,.zip,.rar"><div id="filePreview" style="margin-top:8px;font-size:12px;color:var(--gray-600);">' + (data && data.fileName ? 'Current: ' + getFileIcon(data.fileType) + ' ' + escapeHtml(data.fileName) + ' (' + formatFileSize(data.fileSize) + ')' : 'Belum pilih file') + '</div></div>' +
+      '</div>';
   }
   document.getElementById('modalSaveBtn').onclick = function() { saveModalForm(type, id); };
   document.getElementById('modalOverlay').classList.add('active');
@@ -2372,6 +2455,40 @@ function saveModalForm(type, id) {
       if (usedBy) { showToast('Data ' + role + ' ini sudah punya akun: ' + usedBy.username, 'error'); return; }
     }
     item = { username, password, name, role, refId };
+  } else if (type === 'materi') {
+    const judul = document.getElementById('f_judul').value.trim();
+    const kategori = document.getElementById('f_kategori').value;
+    if (!judul) { showToast('Judul wajib diisi', 'error'); return; }
+    // Get existing data if editing (data variable is not in this scope, fetch from DB)
+    const existingData = isEdit ? DB[type].find(x => x.id === id) : null;
+    let fileData = existingData ? existingData.fileData : null;
+    let fileName = existingData ? existingData.fileName : '';
+    let fileType = existingData ? existingData.fileType : '';
+    let fileSize = existingData ? existingData.fileSize : 0;
+    let uploadedAt = existingData ? existingData.uploadedAt : new Date().toISOString();
+    if (window._uploadedFileData) {
+      fileData = window._uploadedFileData;
+      fileName = window._uploadedFileName;
+      fileType = window._uploadedFileType;
+      fileSize = window._uploadedFileSize;
+      delete window._uploadedFileData;
+      delete window._uploadedFileName;
+      delete window._uploadedFileType;
+      delete window._uploadedFileSize;
+    } else if (!isEdit) {
+      showToast('File wajib diupload', 'error');
+      return;
+    }
+    item = {
+      judul,
+      deskripsi: document.getElementById('f_deskripsi').value.trim(),
+      kategori,
+      mapelId: parseInt(document.getElementById('f_mapelId').value) || null,
+      kelasTarget: document.getElementById('f_kelasTarget').value,
+      fileName, fileType, fileSize, fileData,
+      uploadedBy: getCurrentUserChatId(),
+      uploadedAt: uploadedAt
+    };
   }
   if (isEdit) {
     const idx = DB[type].findIndex(x => x.id === id);
@@ -2390,23 +2507,14 @@ function saveModalForm(type, id) {
 function switchRole(role) {
   selectedLoginRole = role;
   document.querySelectorAll('.login-role-tabs button').forEach(b => b.classList.toggle('active', b.dataset.role === role));
-  updateLoginInfo();
-  // Auto-fill demo credentials
-  const demoUsers = {
-    admin:    { u:'admin',  p:'admin123' },
-    pengajar: { u:'budi',   p:'pengajar123' },
-    siswa:    { u:'adelia', p:'siswa123' }
-  };
-  document.getElementById('loginUsername').value = demoUsers[role].u;
-  document.getElementById('loginPassword').value = demoUsers[role].p;
+  // Don't auto-fill credentials for security (user must type manually)
+  document.getElementById('loginUsername').value = '';
+  document.getElementById('loginPassword').value = '';
+  document.getElementById('loginUsername').focus();
 }
 function updateLoginInfo() {
-  const info = {
-    admin:    'Username: <b>admin</b> | Password: <b>admin123</b>',
-    pengajar: 'Username: <b>budi</b> | Password: <b>pengajar123</b><br/>(atau <b>siti</b> / <b>pengajar123</b>)',
-    siswa:    'Username: <b>adelia</b> | Password: <b>siswa123</b><br/>(atau <b>bagus</b> / <b>citra</b> dengan password <b>siswa123</b>)'
-  };
-  document.getElementById('loginInfo').innerHTML = '<b>Demo Akun ' + ROLE_LABEL[selectedLoginRole] + ':</b><br/>' + info[selectedLoginRole];
+  // Hidden for security - no demo account info shown on login page
+  // Demo accounts are documented separately / known only to admin
 }
 function doLogin() {
   const u = document.getElementById('loginUsername').value.trim();
@@ -3168,6 +3276,153 @@ function formatTime(iso) {
     return d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
   }
   return d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short' });
+}
+
+// ---------- MATERI & SOAL ----------
+function renderMateri() {
+  const role = DB.currentUser ? DB.currentUser.role : 'admin';
+  const isSiswa = (role === 'siswa');
+  // Hide upload button for siswa
+  const btnUpload = document.getElementById('btnUploadMateri');
+  if (btnUpload) btnUpload.style.display = isSiswa ? 'none' : 'inline-flex';
+  // Populate mapel filter
+  const sel = document.getElementById('filterMapelMateri');
+  if (sel.children.length <= 1) {
+    DB.mapel.forEach(m => {
+      const o = document.createElement('option');
+      o.value = m.id; o.textContent = m.nama;
+      sel.appendChild(o);
+    });
+  }
+  const q = (document.getElementById('searchMateri').value || '').toLowerCase();
+  const fk = document.getElementById('filterKategoriMateri').value;
+  const fm = sel.value;
+  let list = DB.materi.filter(m => {
+    if (q && !m.judul.toLowerCase().includes(q)) return false;
+    if (fk && m.kategori !== fk) return false;
+    if (fm && m.mapelId != fm) return false;
+    // Siswa only see materi for their kelas or "Semua Kelas"
+    if (isSiswa) {
+      const s = DB.siswa.find(x => x.id === DB.currentUser.refId);
+      if (s && m.kelasTarget && m.kelasTarget !== 'Semua Kelas' && m.kelasTarget !== s.kelas) return false;
+    }
+    return true;
+  });
+  // Sort by uploadedAt desc (newest first)
+  list.sort((a,b) => new Date(b.uploadedAt || 0) - new Date(a.uploadedAt || 0));
+  document.getElementById('materiCount').textContent = list.length + ' dokumen';
+  const html = list.length ? list.map(m => {
+    const mp = DB.mapel.find(x => x.id === m.mapelId);
+    const uploaderInfo = m.uploadedBy ? getContactInfo(m.uploadedBy) : null;
+    const uploaderName = uploaderInfo ? uploaderInfo.nama.split(',')[0] : (m.uploadedBy || '-');
+    const kategoriBadge = m.kategori === 'Materi Ajar' ? 'badge-info' : (m.kategori === 'Soal' ? 'badge-purple' : (m.kategori === 'Try Out' ? 'badge-danger' : 'badge-success'));
+    const fileIcon = getFileIcon(m.fileType);
+    const fileSizeText = m.fileSize ? formatFileSize(m.fileSize) : '-';
+    const dateText = m.uploadedAt ? new Date(m.uploadedAt).toLocaleDateString('id-ID', { day:'2-digit', month:'short', year:'numeric' }) : '-';
+    const canManage = !isSiswa && (role === 'admin' || m.uploadedBy === getCurrentUserChatId());
+    return '<tr>' +
+      '<td><div style="font-weight:600;">' + escapeHtml(m.judul) + '</div>' + (m.deskripsi ? '<div style="font-size:11px;color:var(--gray-500);margin-top:2px;">' + escapeHtml(m.deskripsi).substring(0,60) + (m.deskripsi.length > 60 ? '...' : '') + '</div>' : '') + '</td>' +
+      '<td><span class="badge ' + kategoriBadge + '">' + (m.kategori || '-') + '</span></td>' +
+      '<td>' + (mp ? mp.nama : '-') + '</td>' +
+      '<td>' + (m.kelasTarget || '-') + '</td>' +
+      '<td>' + fileIcon + ' ' + escapeHtml(m.fileName || '-') + '<br/><small style="color:var(--gray-500)">' + fileSizeText + '</small></td>' +
+      '<td>' + escapeHtml(uploaderName) + '</td>' +
+      '<td>' + dateText + '</td>' +
+      '<td>' +
+        '<button class="btn-link" onclick="downloadMateri(' + m.id + ')" title="Download">&#128190;</button> ' +
+        '<button class="btn-link" onclick="previewMateri(' + m.id + ')" title="Preview">&#128065;</button>' +
+        (canManage ? ' <button class="btn-link" onclick="editItem(\'materi\',' + m.id + ')" title="Edit">&#9998;</button> <button class="btn-link" style="color:var(--danger)" onclick="deleteItem(\'materi\',' + m.id + ')" title="Hapus">&#128465;</button>' : '') +
+      '</td>' +
+      '</tr>';
+  }).join('') : '<tr><td colspan="8"><div class="empty-state"><div class="ico">&#128214;</div>Belum ada materi. Upload sekarang!</div></td></tr>';
+  document.getElementById('tableMateri').innerHTML = html;
+}
+
+function getFileIcon(fileType) {
+  if (!fileType) return '📄';
+  if (fileType.startsWith('image/')) return '🖼️';
+  if (fileType === 'application/pdf') return '📕';
+  if (fileType.includes('word') || fileType.includes('document')) return '📘';
+  if (fileType.includes('sheet') || fileType.includes('excel')) return '📗';
+  if (fileType.includes('presentation') || fileType.includes('powerpoint')) return '📙';
+  if (fileType.startsWith('video/')) return '🎬';
+  if (fileType.startsWith('audio/')) return '🎵';
+  if (fileType.includes('zip') || fileType.includes('rar') || fileType.includes('compressed')) return '🗜️';
+  return '📄';
+}
+
+function formatFileSize(bytes) {
+  if (!bytes) return '0 B';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024*1024) return (bytes/1024).toFixed(1) + ' KB';
+  return (bytes/(1024*1024)).toFixed(2) + ' MB';
+}
+
+function handleFileUpload(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const MAX_SIZE = 5 * 1024 * 1024; // 5MB limit
+  if (file.size > MAX_SIZE) {
+    showToast('File terlalu besar! Max 5 MB. File Anda: ' + formatFileSize(file.size), 'error');
+    input.value = '';
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    // e.target.result is data URL (data:...;base64,...)
+    window._uploadedFileData = e.target.result;
+    window._uploadedFileName = file.name;
+    window._uploadedFileType = file.type;
+    window._uploadedFileSize = file.size;
+    const preview = document.getElementById('filePreview');
+    if (preview) {
+      preview.innerHTML = getFileIcon(file.type) + ' <strong>' + escapeHtml(file.name) + '</strong> (' + formatFileSize(file.size) + ')';
+    }
+  };
+  reader.onerror = function() {
+    showToast('Gagal membaca file', 'error');
+  };
+  reader.readAsDataURL(file);
+}
+
+function downloadMateri(id) {
+  const m = DB.materi.find(x => x.id === id);
+  if (!m) { showToast('Materi tidak ditemukan', 'error'); return; }
+  if (!m.fileData) { showToast('File tidak tersedia', 'error'); return; }
+  const link = document.createElement('a');
+  link.href = m.fileData; // base64 data URL
+  link.download = m.fileName || 'materi';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  showToast('File "' + m.fileName + '" berhasil didownload', 'success');
+}
+
+function previewMateri(id) {
+  const m = DB.materi.find(x => x.id === id);
+  if (!m) { showToast('Materi tidak ditemukan', 'error'); return; }
+  if (!m.fileData) { showToast('File tidak tersedia', 'error'); return; }
+  const isImage = m.fileType && m.fileType.startsWith('image/');
+  const isPDF = m.fileType === 'application/pdf';
+  const isVideo = m.fileType && m.fileType.startsWith('video/');
+  if (isImage || isPDF || isVideo) {
+    const w = window.open('', '_blank');
+    if (!w) { showToast('Popup diblokir browser. Izinkan popup untuk preview.', 'error'); return; }
+    let content = '';
+    if (isImage) {
+      content = '<img src="' + m.fileData + '" style="max-width:100%;height:auto;"/>';
+    } else if (isPDF) {
+      content = '<iframe src="' + m.fileData + '" style="width:100%;height:90vh;border:none;"></iframe>';
+    } else if (isVideo) {
+      content = '<video src="' + m.fileData + '" controls style="max-width:100%;max-height:90vh;"></video>';
+    }
+    w.document.write('<html><head><title>' + escapeHtml(m.judul) + '</title><style>body{font-family:sans-serif;margin:0;padding:16px;background:#f5f5f5;}h2{margin:0 0 12px;} .info{font-size:12px;color:#666;margin-bottom:16px;}</style></head><body><h2>' + escapeHtml(m.judul) + '</h2><div class="info">' + escapeHtml(m.fileName || '') + ' &middot; ' + formatFileSize(m.fileSize) + '</div>' + content + '</body></html>');
+    w.document.close();
+  } else {
+    // For other file types (docx, xlsx, etc), just trigger download
+    showToast('Preview tidak tersedia untuk tipe file ini. File didownload otomatis.', 'info');
+    downloadMateri(id);
+  }
 }
 
 // ---------- MANAJEMEN AKUN ----------
