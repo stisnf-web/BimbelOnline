@@ -267,8 +267,9 @@ textarea.form-control { resize: vertical; min-height: 80px; }
 .rapor-bio { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px 24px; background: var(--gray-50); padding: 16px 22px; border-radius: 8px; margin-bottom: 22px; font-size: 13px; }
 .rapor-bio b { color: var(--gray-700); }
 .rapor-table { width: 100%; border-collapse: collapse; margin-bottom: 22px; table-layout: fixed; }
-.rapor-table th { background: var(--primary-light); color: var(--primary-dark); padding: 9px 10px; text-align: center; font-size: 12px; border: 1px solid var(--gray-200); font-weight: 600; }
-.rapor-table td { padding: 9px 10px; border: 1px solid var(--gray-200); font-size: 13px; text-align: center; vertical-align: middle; }
+.rapor-table th { background: var(--primary-light); color: var(--primary-dark); padding: 10px 6px; text-align: center; font-size: 12px; border: 1px solid var(--gray-200); font-weight: 600; line-height: 1.3; }
+.rapor-table th small { font-size: 10px; font-weight: 500; opacity: 0.75; display: block; margin-top: 2px; }
+.rapor-table td { padding: 9px 6px; border: 1px solid var(--gray-200); font-size: 13px; text-align: center; vertical-align: middle; word-wrap: break-word; }
 .rapor-table td.nama, .rapor-table th.nama { text-align: left; }
 .rapor-table td.kode, .rapor-table th.kode { text-align: left; }
 .rapor-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 24px 0; }
@@ -1017,7 +1018,7 @@ textarea.form-control { resize: vertical; min-height: 80px; }
               <h3>Daftar Akun</h3>
               <div class="subtitle" id="akunCount">0 akun terdaftar</div>
             </div>
-            <button class="btn btn-primary" onclick="openModal('users')">&#43; Tambah Akun</button>
+            <button class="btn btn-primary" id="btnTambahAkun" onclick="openModal('users')">&#43; Tambah Akun</button>
           </div>
           <div class="card-body">
             <div class="filter-bar">
@@ -1339,11 +1340,21 @@ async function saveTableToSupabase(tableName) {
     const supabaseTable = TABLE_NAMES[tableName];
     if (!supabaseTable) return false;
     const rows = DB[tableName].map(r => mapRowToSupabase(tableName, r));
-    // Strategy: delete all + insert all (simple & reliable for small data)
-    await client.from(supabaseTable).delete().neq('id', -1);
-    if (rows.length > 0) {
-      const { error } = await client.from(supabaseTable).insert(rows);
-      if (error) throw error;
+    // STRATEGY: Use UPSERT for chat (avoid DELETE+INSERT race condition)
+    // For other tables: keep DELETE+INSERT to handle deletions properly
+    if (tableName === 'chat' || tableName === 'materi') {
+      // UPSERT (insert new, update existing) - no DELETE so no race condition
+      if (rows.length > 0) {
+        const { error } = await client.from(supabaseTable).upsert(rows, { onConflict: 'id', ignoreDuplicates: false });
+        if (error) throw error;
+      }
+    } else {
+      // DELETE all + INSERT all (current strategy)
+      await client.from(supabaseTable).delete().neq('id', -1);
+      if (rows.length > 0) {
+        const { error } = await client.from(supabaseTable).insert(rows);
+        if (error) throw error;
+      }
     }
     // Update counter
     await client.from('bimbel_counters').upsert({
@@ -1486,35 +1497,55 @@ function isUserOnline(chatId) {
   return onlineUsers.has(chatId);
 }
 
+// Debounce timers for refreshTableFromSupabase (avoid race condition from rapid realtime events)
+let refreshTimers = {};
+let isRefreshing = {};
+
 async function refreshTableFromSupabase(tableName) {
-  const client = await initSupabase();
-  if (!client) return;
-  try {
-    const res = await client.from(TABLE_NAMES[tableName]).select('*').order('id');
-    if (!res.error && res.data) {
-      DB[tableName] = res.data.map(r => mapRowFromSupabase(tableName, r));
-      // Re-render current page
-      const activePage = document.querySelector('.page.active');
-      if (activePage) {
-        const pageId = activePage.id.replace('page-', '');
-        if (pageId === 'dashboard') renderDashboard();
-        else if (pageId === 'siswa') renderSiswa();
-        else if (pageId === 'pengajar') renderPengajar();
-        else if (pageId === 'mapel') renderMapel();
-        else if (pageId === 'jadwal') renderJadwal();
-        else if (pageId === 'pembayaran') renderPembayaran();
-        else if (pageId === 'nilai') renderNilai();
-        else if (pageId === 'absensi') renderAbsensi();
-        else if (pageId === 'materi') renderMateri();
-        else if (pageId === 'chat') refreshChatUI();
-        else if (pageId === 'akun') renderAkun();
-        else if (pageId === 'laporan') renderLaporan();
+  // Debounce: wait 300ms before refreshing (in case DELETE+INSERT events come in rapid succession)
+  // This prevents race condition where fetch happens BETWEEN delete and insert
+  if (refreshTimers[tableName]) clearTimeout(refreshTimers[tableName]);
+  refreshTimers[tableName] = setTimeout(async () => {
+    // Skip if already refreshing this table
+    if (isRefreshing[tableName]) return;
+    isRefreshing[tableName] = true;
+    const client = await initSupabase();
+    if (!client) { isRefreshing[tableName] = false; return; }
+    try {
+      const res = await client.from(TABLE_NAMES[tableName]).select('*').order('id');
+      if (!res.error && res.data) {
+        // Don't replace with empty if we already have data (avoid temporary wipe)
+        if (res.data.length === 0 && DB[tableName] && DB[tableName].length > 0) {
+          console.log('Skipping refresh for', tableName, '- would wipe', DB[tableName].length, 'rows with empty fetch (likely race condition)');
+          isRefreshing[tableName] = false;
+          return;
+        }
+        DB[tableName] = res.data.map(r => mapRowFromSupabase(tableName, r));
+        // Re-render current page
+        const activePage = document.querySelector('.page.active');
+        if (activePage) {
+          const pageId = activePage.id.replace('page-', '');
+          if (pageId === 'dashboard') renderDashboard();
+          else if (pageId === 'siswa') renderSiswa();
+          else if (pageId === 'pengajar') renderPengajar();
+          else if (pageId === 'mapel') renderMapel();
+          else if (pageId === 'jadwal') renderJadwal();
+          else if (pageId === 'pembayaran') renderPembayaran();
+          else if (pageId === 'nilai') renderNilai();
+          else if (pageId === 'absensi') renderAbsensi();
+          else if (pageId === 'materi') renderMateri();
+          else if (pageId === 'chat') refreshChatUI();
+          else if (pageId === 'akun') renderAkun();
+          else if (pageId === 'laporan') renderLaporan();
+        }
+        updateNotifBadge();
       }
-      updateNotifBadge();
+    } catch(e) {
+      console.warn('Refresh failed for', tableName, ':', e.message);
+    } finally {
+      isRefreshing[tableName] = false;
     }
-  } catch(e) {
-    console.warn('Refresh failed for', tableName, ':', e.message);
-  }
+  }, 300);
 }
 
 // ---------- DATA STATE ----------
@@ -1912,12 +1943,15 @@ function renderDashboardSiswa() {
   // Nilai saya
   const myNilai = DB.nilai.filter(n => n.siswaId === s.id);
   const avgNilai = myNilai.length ? (myNilai.reduce((a,n) => a+n.nilai,0)/myNilai.length).toFixed(1) : '0';
-  // Kehadiran saya
+  // Kehadiran saya (real-time calculation)
   let h=0, totalAbs=0;
   DB.absensi.forEach(rec => rec.records.forEach(r => {
     if (r.siswaId === s.id) { totalAbs++; if (r.status === 'H') h++; }
   }));
-  const persenHadir = totalAbs > 0 ? Math.round(h/totalAbs*100) : 100;
+  // Real percentage: 0% if no H attendances, actual % if there are sessions, "Belum ada data" if no sessions at all
+  const persenHadir = totalAbs > 0 ? Math.round(h/totalAbs*100) : 0;
+  const hadirDisplay = totalAbs > 0 ? (persenHadir + '%') : '—';
+  const hadirSubtext = totalAbs > 0 ? (h + '/' + totalAbs + ' sesi hadir') : 'Belum ada sesi absensi';
   // Pembayaran saya
   const myPembayaran = DB.pembayaran.filter(p => p.siswaId === s.id);
   const lunas = myPembayaran.filter(p => p.status === 'Lunas').length;
@@ -1947,7 +1981,7 @@ function renderDashboardSiswa() {
     '<p class="page-desc">Ringkasan aktivitas belajar Anda hari ini, ' + today + '.</p>' +
     '<div class="stat-grid">' +
       '<div class="stat-card"><div class="stat-icon bg-blue">&#127942;</div><div class="stat-info"><p>Rata-rata Nilai</p><h4>' + avgNilai + '</h4><div class="trend up">dari ' + myNilai.length + ' nilai</div></div></div>' +
-      '<div class="stat-card"><div class="stat-icon bg-green">&#9989;</div><div class="stat-info"><p>Kehadiran</p><h4>' + persenHadir + '%</h4><div class="trend up">' + h + '/' + totalAbs + ' sesi hadir</div></div></div>' +
+      '<div class="stat-card"><div class="stat-icon bg-green">&#9989;</div><div class="stat-info"><p>Kehadiran</p><h4>' + hadirDisplay + '</h4><div class="trend up">' + hadirSubtext + '</div></div></div>' +
       '<div class="stat-card"><div class="stat-icon bg-amber">&#128176;</div><div class="stat-info"><p>Status SPP</p><h4 style="font-size:18px;">' + payStatus + '</h4><div class="trend up">' + lunas + ' lunas &middot; ' + pending + ' pending</div></div></div>' +
       '<div class="stat-card"><div class="stat-icon bg-purple">&#128197;</div><div class="stat-info"><p>Kelas Hari Ini</p><h4>' + myJadwalToday.length + '</h4><div class="trend up">jadwal kelas</div></div></div>' +
     '</div>' +
@@ -3116,16 +3150,16 @@ function renderRapor() {
     '<table class="rapor-table">' +
       '<colgroup>' +
         '<col style="width:4%">' +
-        '<col style="width:9%">' +
-        '<col style="width:30%">' +
-        '<col style="width:8%">' +
-        '<col style="width:8%">' +
+        '<col style="width:10%">' +
+        '<col style="width:28%">' +
         '<col style="width:9%">' +
         '<col style="width:9%">' +
         '<col style="width:9%">' +
-        '<col style="width:14%">' +
+        '<col style="width:9%">' +
+        '<col style="width:10%">' +
+        '<col style="width:12%">' +
       '</colgroup>' +
-      '<thead><tr><th>No</th><th class="kode">Kode</th><th class="nama">Mata Pelajaran</th><th>Tugas (30%)</th><th>Quiz (20%)</th><th>UTS (20%)</th><th>UAS (30%)</th><th>Nilai Akhir</th><th>Predikat</th></tr></thead>' +
+      '<thead><tr><th>No</th><th class="kode">Kode</th><th class="nama">Mata Pelajaran</th><th>Tugas<br><small>30%</small></th><th>Quiz<br><small>20%</small></th><th>UTS<br><small>20%</small></th><th>UAS<br><small>30%</small></th><th>Nilai<br>Akhir</th><th>Predikat</th></tr></thead>' +
       '<tbody>' +
         (mapelRows.length ? mapelRows.map((r,i) => '<tr><td>' + (i+1) + '</td><td class="kode">' + r.kode + '</td><td class="nama">' + r.nama + '</td><td>' + r.tugas + '</td><td>' + r.quiz + '</td><td>' + r.uts + '</td><td>' + r.uas + '</td><td style="font-weight:700;color:var(--primary)">' + r.final + '</td><td><span class="badge ' + r.predikatClass + '">' + r.predikat + '</span></td></tr>').join('') : '<tr><td colspan="9" style="text-align:center;">Belum ada nilai</td></tr>') +
       '</tbody>' +
@@ -3256,18 +3290,62 @@ function sendChat() {
   const text = inp.value.trim();
   const myChatId = getCurrentUserChatId();
   if (!text || !activeChatContact || !myChatId) return;
-  DB.chat.push({
+  const newMsg = {
     id: DB.nextId.chat++,
     from: myChatId,
     to: activeChatContact,
     text: text,
     ts: new Date().toISOString(),
     fromMe: true
-  });
-  saveData(['chat']);
+  };
+  DB.chat.push(newMsg);
+  // IMPORTANT: Save to localStorage only, skip queueSync for chat
+  // We'll insert the new message directly to Supabase immediately (no debounce)
+  // to avoid race condition where another device's sync would wipe this message
+  saveData([]);
   inp.value = '';
   renderChatArea();
   renderChatContacts(document.querySelector('.chat-search input').value);
+  // Immediately insert to Supabase (don't wait for debounced queueSync)
+  insertChatMessageToSupabase(newMsg);
+}
+
+// Insert a single chat message immediately to Supabase (no debounce, no race condition)
+async function insertChatMessageToSupabase(msg) {
+  const client = await initSupabase();
+  if (!client) {
+    // Fallback to queueSync if Supabase unavailable
+    queueSync('chat');
+    return;
+  }
+  try {
+    const supabaseRow = mapRowToSupabase('chat', msg);
+    let { error } = await client.from('bimbel_chat').insert(supabaseRow);
+    if (error) {
+      // If id conflict (unique_violation), retry with timestamp-based id
+      if (error.code === '23505' || (error.message && error.message.includes('duplicate'))) {
+        console.warn('Chat id conflict, retrying with timestamp id:', msg.id);
+        msg.id = Date.now();
+        // Update local DB with new id
+        const localMsg = DB.chat.find(m => m.ts === msg.ts && m.from === msg.from);
+        if (localMsg) localMsg.id = msg.id;
+        const retry = await client.from('bimbel_chat').insert(mapRowToSupabase('chat', msg));
+        if (retry.error) throw retry.error;
+      } else {
+        throw error;
+      }
+    }
+    // Update counter
+    await client.from('bimbel_counters').upsert({
+      table_name: 'chat',
+      next_id: DB.nextId.chat
+    });
+    console.log('Chat message inserted immediately to cloud, id:', msg.id);
+  } catch(e) {
+    console.warn('Immediate chat insert failed, falling back to queueSync:', e.message);
+    // Fallback: schedule full sync
+    queueSync('chat');
+  }
 }
 function formatTime(iso) {
   const d = new Date(iso);
@@ -3427,14 +3505,33 @@ function previewMateri(id) {
 
 // ---------- MANAJEMEN AKUN ----------
 function renderAkun() {
+  const role = DB.currentUser ? DB.currentUser.role : 'admin';
+  // Hide tombol Tambah Akun untuk pengajar (hanya admin yg boleh tambah akun)
+  const btnTambah = document.getElementById('btnTambahAkun');
+  if (btnTambah) btnTambah.style.display = (role === 'admin') ? 'inline-flex' : 'none';
+  // Untuk pengajar: batasi hanya bisa lihat akun diri sendiri + siswa di mapelnya
+  let allowedUserIds = null;
+  if (role === 'pengajar') {
+    const myMapelIds = DB.mapel.filter(m => m.pengajarId === DB.currentUser.refId).map(m => m.id);
+    const mySiswaIds = DB.siswa.filter(s => s.mapelIds && s.mapelIds.some(mid => myMapelIds.includes(mid))).map(s => s.id);
+    allowedUserIds = new Set();
+    DB.users.forEach(u => {
+      // Include self (own pengajar account)
+      if (u.role === 'pengajar' && u.refId === DB.currentUser.refId) allowedUserIds.add(u.id);
+      // Include siswa who take any of my mapel
+      if (u.role === 'siswa' && mySiswaIds.includes(u.refId)) allowedUserIds.add(u.id);
+    });
+  }
   const q = (document.getElementById('searchUsers').value || '').toLowerCase();
   const fr = document.getElementById('filterRoleUsers').value;
   let list = DB.users.filter(u => {
+    // Filter by role-based permission (pengajar only sees allowedUserIds)
+    if (allowedUserIds && !allowedUserIds.has(u.id)) return false;
     if (q && !u.username.toLowerCase().includes(q) && !u.name.toLowerCase().includes(q)) return false;
     if (fr && u.role !== fr) return false;
     return true;
   });
-  document.getElementById('akunCount').textContent = list.length + ' akun terdaftar';
+  document.getElementById('akunCount').textContent = list.length + ' akun terdaftar' + (role === 'pengajar' ? ' (akun Anda & siswa di mapel Anda)' : '');
   const html = list.length ? list.map(u => {
     let refInfo = '-';
     if (u.role === 'siswa' && u.refId) {
@@ -3448,16 +3545,47 @@ function renderAkun() {
     }
     const roleBadge = u.role === 'admin' ? 'badge-danger' : (u.role === 'pengajar' ? 'badge-purple' : 'badge-info');
     const initials = u.name.split(' ').slice(0,2).map(x => x[0]).join('').toUpperCase();
+    // Permission check for edit/delete
+    const isOwnAccount = (u.id === DB.currentUser.id);
+    const isProtected = (u.id === 1);
+    // Admin: can manage all (except protected admin id=1)
+    // Pengajar: can manage own account + siswa in their mapel
+    let canEdit = false;
+    let canDelete = false;
+    if (role === 'admin' && !isProtected) {
+      canEdit = true;
+      canDelete = true;
+    } else if (role === 'pengajar' && !isProtected) {
+      if (isOwnAccount) {
+        canEdit = true; // Edit own account (e.g., change password)
+        canDelete = false; // Cannot delete own account
+      } else if (u.role === 'siswa' && allowedUserIds && allowedUserIds.has(u.id)) {
+        canEdit = true; // Edit siswa in their mapel
+        canDelete = true;
+      }
+      // Pengajar cannot edit/delete other pengajar or admin
+    }
+    let actionsHtml = '';
+    if (canEdit) {
+      actionsHtml += '<button class="btn-link" onclick="editItem(\'users\',' + u.id + ')">Edit</button> ';
+    }
+    if (canDelete) {
+      actionsHtml += '<button class="btn-link" style="color:var(--danger)" onclick="deleteItem(\'users\',' + u.id + ')">Hapus</button>';
+    }
+    if (isProtected) {
+      actionsHtml = '<span style="color:var(--gray-400);font-size:12px">(protected)</span>';
+    } else if (!canEdit && !canDelete) {
+      actionsHtml = '<span style="color:var(--gray-400);font-size:12px">(no access)</span>';
+    }
     return '<tr>' +
       '<td>' + u.id + '</td>' +
       '<td><div class="row-avatar"><div class="av">' + initials + '</div><strong>' + u.username + '</strong></div></td>' +
       '<td>' + u.name + '</td>' +
       '<td><span class="badge ' + roleBadge + '">' + ROLE_LABEL[u.role] + '</span></td>' +
       '<td style="font-size:12px;color:var(--gray-600)">' + refInfo + '</td>' +
-      '<td><button class="btn-link" onclick="editItem(\'users\',' + u.id + ')">Edit</button> ' +
-      (u.id === 1 ? '<span style="color:var(--gray-400);font-size:12px">(protected)</span>' : '<button class="btn-link" style="color:var(--danger)" onclick="deleteItem(\'users\',' + u.id + ')">Hapus</button>') + '</td>' +
+      '<td>' + actionsHtml + '</td>' +
       '</tr>';
-  }).join('') : '<tr><td colspan="6"><div class="empty-state"><div class="ico">&#128100;</div>Belum ada akun</div></td></tr>';
+  }).join('') : '<tr><td colspan="6"><div class="empty-state"><div class="ico">&#128100;</div>Belum ada akun yang dapat Anda akses</div></td></tr>';
   document.getElementById('tableUsers').innerHTML = html;
 }
 
