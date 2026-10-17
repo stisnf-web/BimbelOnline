@@ -1581,8 +1581,8 @@ let onlineUsers = new Set(); // chatIds of users currently online (via Supabase 
 // Role permissions map (which pages each role can access)
 const ROLE_ACCESS = {
   admin:   ['dashboard','siswa','pengajar','mapel','jadwal','pembayaran','nilai','absensi','rapor','materi','chat','akun','laporan','pengaturan'],
-  pengajar:['dashboard','siswa','jadwal','absensi','nilai','materi','chat','akun'],
-  siswa:   ['dashboard','jadwal','pembayaran','nilai','rapor','materi','chat']
+  pengajar:['dashboard','siswa','jadwal','absensi','nilai','rapor','materi','chat','akun'],
+  siswa:   ['dashboard','jadwal','pembayaran','nilai','materi','chat']
 };
 const ROLE_LABEL = { admin:'Administrator', pengajar:'Pengajar', siswa:'Siswa' };
 
@@ -3047,11 +3047,22 @@ function deleteAbsensi(id) {
 function populateRaporSelect() {
   const sel = document.getElementById('raporSiswa');
   const role = DB.currentUser ? DB.currentUser.role : 'admin';
-  const isSiswa = (role === 'siswa');
   // Clear existing options
   sel.innerHTML = '';
-  if (isSiswa) {
-    // Siswa: hanya bisa lihat rapor sendiri, dropdown disabled
+  if (role === 'pengajar') {
+    // Pengajar: only show siswa in their mapel (not all siswa)
+    const myMapelIds = DB.mapel.filter(m => m.pengajarId === DB.currentUser.refId).map(m => m.id);
+    const mySiswa = DB.siswa.filter(s => s.mapelIds && s.mapelIds.some(mid => myMapelIds.includes(mid)));
+    mySiswa.forEach(s => {
+      const o = document.createElement('option');
+      o.value = s.id; o.textContent = s.nama + ' (' + s.kelas + ')';
+      sel.appendChild(o);
+    });
+    sel.disabled = false;
+    const grp = document.getElementById('grpRaporSiswa');
+    if (grp) grp.style.display = '';
+  } else if (role === 'siswa') {
+    // Siswa shouldn't access this page (hidden in ROLE_ACCESS), but if they do, show own rapor
     const s = DB.siswa.find(x => x.id === DB.currentUser.refId);
     if (s) {
       const o = document.createElement('option');
@@ -3060,11 +3071,10 @@ function populateRaporSelect() {
       sel.appendChild(o);
     }
     sel.disabled = true;
-    // Hide label dan group entirely untuk siswa
     const grp = document.getElementById('grpRaporSiswa');
     if (grp) grp.style.display = 'none';
   } else {
-    // Admin & pengajar: bisa pilih siswa mana saja
+    // Admin: bisa pilih siswa mana saja
     DB.siswa.forEach(s => {
       const o = document.createElement('option');
       o.value = s.id; o.textContent = s.nama + ' (' + s.kelas + ')';
